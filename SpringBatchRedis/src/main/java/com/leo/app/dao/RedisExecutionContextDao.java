@@ -27,17 +27,23 @@ import org.springframework.util.Assert;
 
 import com.leo.app.dao.model.JobExecutionContext;
 import com.leo.app.dao.model.StepExecutionContext;
+import com.leo.app.util.AppConstants;
 
+/**
+ * ExecutionContextDao Redis implementation for persisting and retrieving
+ * {@link ExecutionContext}s.
+ * 
+ * Stores execution context data related to both Step and Job.
+ * 
+ * @author anoop
+ *
+ */
 @Repository
 public class RedisExecutionContextDao implements ExecutionContextDao {
+
 	private static final Logger LOGGER = LoggerFactory.getLogger(RedisExecutionContextDao.class);
 
-	private static final String JOB_EXECUTION_CONTEXT = "JOB_EXECUTION_CONTEXT";
-	private static final String STEP_EXECUTION_CONTEXT = "STEP_EXECUTION_CONTEXT";
-
-	private static final int DEFAULT_MAX_VARCHAR_LENGTH = 2500;
-
-	private int shortContextLength = DEFAULT_MAX_VARCHAR_LENGTH;
+	private int shortContextLength = AppConstants.DEFAULT_MAX_VARCHAR_LENGTH;
 
 	private ExecutionContextSerializer serializer;
 
@@ -52,67 +58,87 @@ public class RedisExecutionContextDao implements ExecutionContextDao {
 		serializer = new DefaultExecutionContextSerializer();
 	}
 
+	/**
+	 * @param jobExecution {@link JobExecution} instance that contains the context.
+	 * @return execution context associated with the given jobExecution
+	 */
 	@Override
 	public ExecutionContext getExecutionContext(JobExecution jobExecution) {
 		Long executionId = jobExecution.getId();
-		Assert.notNull(executionId, "ExecutionId must not be null.");
+		Assert.notNull(executionId, "Job Execution Id must not be null.");
 
-		/**
-		 * SELECT SHORT_CONTEXT, SERIALIZED_CONTEXT FROM JOB_EXECUTION_CONTEXT WHERE
-		 * JOB_EXECUTION_ID = ?
-		 */
-
-		Set<JobExecutionContext> executionContext = opsJobContextSortedSet.rangeByScore(JOB_EXECUTION_CONTEXT,
-				executionId, executionId);
+		Set<JobExecutionContext> executionContext = opsJobContextSortedSet
+				.rangeByScore(AppConstants.JOB_EXECUTION_CONTEXT, executionId, executionId);
 		if (!executionContext.isEmpty()) {
-			for (JobExecutionContext context : executionContext) {
-				return getJobExecutionContext(context);
-			}
+			return getJobExecutionContext(executionContext.iterator().next());
 		}
 		return new ExecutionContext();
 	}
 
+	/**
+	 * @param stepExecution {@link StepExecution} instance that contains the
+	 *                      context.
+	 * @return execution context associated with the given stepExecution
+	 */
 	@Override
 	public ExecutionContext getExecutionContext(StepExecution stepExecution) {
 		Long executionId = stepExecution.getId();
-		Assert.notNull(executionId, "ExecutionId must not be null.");
+		Assert.notNull(executionId, "Step Execution Id must not be null.");
 
-		Set<StepExecutionContext> executionContext = opsStepContextSortedSet.rangeByScore(STEP_EXECUTION_CONTEXT,
-				executionId, executionId);
-		
+		Set<StepExecutionContext> executionContext = opsStepContextSortedSet
+				.rangeByScore(AppConstants.STEP_EXECUTION_CONTEXT, executionId, executionId);
+
 		if (!executionContext.isEmpty()) {
-			for (StepExecutionContext context : executionContext) {
-				return getStepExecutionContext(context);
-			}
+			return getStepExecutionContext(executionContext.iterator().next());
 		}
 		return new ExecutionContext();
 	}
 
+	/**
+	 * Persist the execution context associated with the given jobExecution,
+	 * persistent entry for the context should not exist yet.
+	 *
+	 * @param jobExecution {@link JobExecution} instance that contains the context.
+	 */
 	@Override
 	public void saveExecutionContext(JobExecution jobExecution) {
 		Long executionId = jobExecution.getId();
 		ExecutionContext executionContext = jobExecution.getExecutionContext();
-		Assert.notNull(executionId, "ExecutionId must not be null.");
-		Assert.notNull(executionContext, "The ExecutionContext must not be null.");
+		Assert.notNull(executionId, "Job ExecutionId must not be null.");
+		Assert.notNull(executionContext, "The Execution Context must not be null.");
 
 		String serializedContext = serializeContext(executionContext);
 
-		persistSerializedContext(executionId, serializedContext, JOB_EXECUTION_CONTEXT);
+		persistSerializedContext(executionId, serializedContext, AppConstants.JOB_EXECUTION_CONTEXT);
 
 	}
 
+	/**
+	 * Persist the execution context associated with the given stepExecution,
+	 * persistent entry for the context should not exist yet.
+	 *
+	 * @param stepExecution {@link StepExecution} instance that contains the
+	 *                      context.
+	 */
 	@Override
 	public void saveExecutionContext(StepExecution stepExecution) {
 		Long executionId = stepExecution.getId();
 		ExecutionContext executionContext = stepExecution.getExecutionContext();
-		Assert.notNull(executionId, "ExecutionId must not be null.");
-		Assert.notNull(executionContext, "The ExecutionContext must not be null.");
+		Assert.notNull(executionId, "Step ExecutionId must not be null.");
+		Assert.notNull(executionContext, "The Execution Context must not be null.");
 
 		String serializedContext = serializeContext(executionContext);
 
-		persistSerializedContext(executionId, serializedContext, STEP_EXECUTION_CONTEXT);
+		persistSerializedContext(executionId, serializedContext, AppConstants.STEP_EXECUTION_CONTEXT);
 	}
 
+	/**
+	 * Persist the execution context associated with each stepExecution in a given
+	 * collection, persistent entry for the context should not exist yet.
+	 *
+	 * @param stepExecutions a collection of {@link StepExecution}s that contain the
+	 *                       contexts.
+	 */
 	@Override
 	public void saveExecutionContexts(Collection<StepExecution> stepExecutions) {
 		Assert.notNull(stepExecutions, "Attempt to save an null collection of step executions");
@@ -124,9 +150,15 @@ public class RedisExecutionContextDao implements ExecutionContextDao {
 			Assert.notNull(executionContext, "The ExecutionContext must not be null.");
 			serializedContexts.put(executionId, serializeContext(executionContext));
 		}
-		persistSerializedContexts(serializedContexts, STEP_EXECUTION_CONTEXT);
+		persistSerializedContexts(serializedContexts, AppConstants.STEP_EXECUTION_CONTEXT);
 	}
 
+	/**
+	 * Persist the updates of execution context associated with the given
+	 * jobExecution. Persistent entry should already exist for this context.
+	 *
+	 * @param jobExecution {@link JobExecution} instance that contains the context.
+	 */
 	@Override
 	public void updateExecutionContext(JobExecution jobExecution) {
 		Long executionId = jobExecution.getId();
@@ -136,14 +168,22 @@ public class RedisExecutionContextDao implements ExecutionContextDao {
 
 		String serializedContext = serializeContext(executionContext);
 
-		persistSerializedContext(executionId, serializedContext, JOB_EXECUTION_CONTEXT);
+		persistSerializedContext(executionId, serializedContext, AppConstants.JOB_EXECUTION_CONTEXT);
 	}
 
+	/**
+	 * Persist the updates of execution context associated with the given
+	 * stepExecution. Persistent entry should already exist for this context.
+	 *
+	 * @param stepExecution {@link StepExecution} instance that contains the
+	 *                      context.
+	 */
 	@Override
 	public void updateExecutionContext(final StepExecution stepExecution) {
 		// Attempt to prevent concurrent modification errors by blocking here if
 		// someone is already trying to do it.
-		synchronized (stepExecution) {
+		StepExecution execution = stepExecution;
+		synchronized (execution) {
 			Long executionId = stepExecution.getId();
 			ExecutionContext executionContext = stepExecution.getExecutionContext();
 			Assert.notNull(executionId, "ExecutionId must not be null.");
@@ -151,7 +191,7 @@ public class RedisExecutionContextDao implements ExecutionContextDao {
 
 			String serializedContext = serializeContext(executionContext);
 
-			persistSerializedContext(executionId, serializedContext, STEP_EXECUTION_CONTEXT);
+			persistSerializedContext(executionId, serializedContext, AppConstants.STEP_EXECUTION_CONTEXT);
 		}
 	}
 
@@ -188,22 +228,22 @@ public class RedisExecutionContextDao implements ExecutionContextDao {
 			longContext = null;
 		}
 
-		if (JOB_EXECUTION_CONTEXT.equals(contextKey)) {
+		if (AppConstants.JOB_EXECUTION_CONTEXT.equals(contextKey)) {
 			JobExecutionContext context = new JobExecutionContext();
 			context.setJobExecutionId(executionId);
 			context.setShortContext(shortContext);
 			if (longContext != null) {
 				context.setSerializedContext(longContext);
 			}
-			opsJobContextSortedSet.add(JOB_EXECUTION_CONTEXT, context, executionId);
-		} else if (STEP_EXECUTION_CONTEXT.equals(contextKey)) {
+			opsJobContextSortedSet.add(AppConstants.JOB_EXECUTION_CONTEXT, context, executionId);
+		} else if (AppConstants.STEP_EXECUTION_CONTEXT.equals(contextKey)) {
 			StepExecutionContext context = new StepExecutionContext();
 			context.setStepExecutionId(executionId);
 			context.setShortContext(shortContext);
 			if (longContext != null) {
 				context.setSerializedContext(longContext);
 			}
-			opsStepContextSortedSet.add(STEP_EXECUTION_CONTEXT, context, executionId);
+			opsStepContextSortedSet.add(AppConstants.STEP_EXECUTION_CONTEXT, context, executionId);
 		}
 	}
 
@@ -225,14 +265,14 @@ public class RedisExecutionContextDao implements ExecutionContextDao {
 					shortContext = serializedContext;
 					longContext = null;
 				}
-				if (STEP_EXECUTION_CONTEXT.equals(contextKey)) {
+				if (AppConstants.STEP_EXECUTION_CONTEXT.equals(contextKey)) {
 					StepExecutionContext context = new StepExecutionContext();
 					context.setStepExecutionId(executionId);
 					context.setShortContext(shortContext);
 					if (longContext != null) {
 						context.setSerializedContext(longContext);
 					}
-					opsStepContextSortedSet.add(STEP_EXECUTION_CONTEXT, context, executionId);
+					opsStepContextSortedSet.add(AppConstants.STEP_EXECUTION_CONTEXT, context, executionId);
 				}
 			}
 		}

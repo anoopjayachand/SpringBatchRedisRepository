@@ -9,6 +9,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
+/**
+ * Job scheduler.
+ * 
+ * @author anoop
+ *
+ */
 @Configuration
 @EnableScheduling
 public class JobScheduler {
@@ -19,7 +25,7 @@ public class JobScheduler {
 	@Autowired	
 	Job bookWriterJob;
 
-	@Scheduled(cron = "*/10 * * * * ?")
+	@Scheduled(cron = "${cron.book.reader.exp}")
     public void perform() throws Exception
     {
         JobParameters params = new JobParametersBuilder()

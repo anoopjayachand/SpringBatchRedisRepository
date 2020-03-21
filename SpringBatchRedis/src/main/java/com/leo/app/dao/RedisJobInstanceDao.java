@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import javax.annotation.Resource;
 
@@ -16,28 +17,27 @@ import org.springframework.batch.core.JobInstance;
 import org.springframework.batch.core.JobKeyGenerator;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.batch.core.launch.NoSuchJobException;
-import org.springframework.batch.core.repository.dao.JdbcJobInstanceDao;
 import org.springframework.batch.core.repository.dao.JobInstanceDao;
-import org.springframework.batch.core.repository.dao.MapJobInstanceDao;
-import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
 import com.leo.app.dao.model.RedisJobExecution;
 import com.leo.app.dao.model.RedisJobInstance;
+import com.leo.app.util.AppConstants;
 
+/**
+ * Data Access Object - Redis implementation for job instances.
+ * 
+ * @author anoop
+ *
+ */
 @Repository
 public class RedisJobInstanceDao implements JobInstanceDao {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(RedisJobInstanceDao.class);
-	private final String STAR_WILDCARD = "\\*";
-	private final String STAR_WILDCARD_PATTERN = ".*";
-
-	JdbcJobInstanceDao test = null;
-
-	MapJobInstanceDao df = null;
 
 	@Resource(name = "redisTemplate")
 	ZSetOperations<String, RedisJobInstance> opsJobInstanceSortedSet;
@@ -48,13 +48,22 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 	@Resource(name = "redisTemplate")
 	ZSetOperations<String, RedisJobExecution> opsJobExecutionSortedSet;
 
-	private final String JOB_EXECUTION_SET_KEY = "JOB_EXECUTION_SET_KEY";
-	private static final String JOB_INSTANCE_SET_KEY = "JOB_INSTANCE_SET_KEY";
-	private static final String JOB_INSTANCE_HASH_KEY = "JOB_INSTANCE_HASH_KEY";
-	private static final String JOB_INSTANCE_STRING_KEY = "JOB_NAME_KEY";
-
 	private JobKeyGenerator<JobParameters> jobKeyGenerator = new DefaultJobKeyGenerator();
 
+	/**
+	 * Create a JobInstance with given name and parameters.
+	 *
+	 * PreConditions: JobInstance for given name and parameters must not already
+	 * exist
+	 *
+	 * PostConditions: A valid job instance will be returned which has been
+	 * persisted and contains an unique Id.
+	 *
+	 * @param jobName       {@link String} containing the name of the job.
+	 * @param jobParameters {@link JobParameters} containing the parameters for the
+	 *                      JobInstance.
+	 * @return JobInstance {@link JobInstance} instance that was created.
+	 */
 	@Override
 	public JobInstance createJobInstance(String jobName, JobParameters jobParameters) {
 		Assert.notNull(jobName, "Job name must not be null.");
@@ -71,19 +80,24 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 		JobInstance jobInstance = new JobInstance(jobId, jobName);
 		jobInstance.incrementVersion();
 
-		/**
-		 * INSERT into JOB_INSTANCE(JOB_INSTANCE_ID, JOB_NAME, JOB_KEY, VERSION)
-		 * 
-		 */
+		opsJobInstanceSortedSet.add(AppConstants.JOB_INSTANCE_SET_KEY, redisJobInstance,
+				redisJobInstance.getJobInstanceId());
 
-		opsJobInstanceSortedSet.add(JOB_INSTANCE_SET_KEY, redisJobInstance, redisJobInstance.getJobInstanceId());
-		
-		opsJobInstanceString.add(JOB_INSTANCE_STRING_KEY, redisJobInstance.getJobName(),
+		opsJobInstanceString.add(AppConstants.JOB_INSTANCE_STRING_KEY, redisJobInstance.getJobName(),
 				redisJobInstance.getJobInstanceId());
 		return jobInstance;
 
 	}
 
+	/**
+	 * Find the job instance that matches the given name and parameters. If no
+	 * matching job instances are found, then returns null.
+	 *
+	 * @param jobName       the name of the job
+	 * @param jobParameters the parameters with which the job was executed
+	 * @return {@link JobInstance} object matching the job name and
+	 *         {@link JobParameters} or {@code null}
+	 */
 	@Override
 	public JobInstance getJobInstance(String jobName, JobParameters jobParameters) {
 		Assert.notNull(jobName, "Job name must not be null.");
@@ -91,16 +105,12 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 
 		String jobKey = jobKeyGenerator.generateKey(jobParameters);
 
-		/**
-		 * SELECT JOB_INSTANCE_ID, JOB_NAME from %PREFIX%JOB_INSTANCE where JOB_NAME = ?
-		 * and JOB_KEY = ?
-		 * 
-		 */
 		List<JobInstance> result = new ArrayList<>();
 		JobInstance jobInstance = null;
 
 		if (StringUtils.hasLength(jobKey)) {
-			Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(JOB_INSTANCE_SET_KEY, 0, -1);
+			Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(AppConstants.JOB_INSTANCE_SET_KEY,
+					0, -1);
 			if (!redisJobInstances.isEmpty()) {
 				for (RedisJobInstance redisJobInstance : redisJobInstances) {
 					if (redisJobInstance.getJobName().equals(jobName) && redisJobInstance.getJobKey().equals(jobKey)) {
@@ -111,11 +121,9 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 				}
 			}
 		} else {
-			/**
-			 * SELECT JOB_INSTANCE_ID, JOB_NAME from %PREFIX%JOB_INSTANCE where JOB_NAME = ?
-			 * and (JOB_KEY = ? OR JOB_KEY is NULL)
-			 */
-			Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(JOB_INSTANCE_SET_KEY, 0, -1);
+
+			Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(AppConstants.JOB_INSTANCE_SET_KEY,
+					0, -1);
 			if (!redisJobInstances.isEmpty()) {
 				for (RedisJobInstance redisJobInstance : redisJobInstances) {
 					if ((redisJobInstance.getJobName().equals(jobName)) && ((redisJobInstance.getJobKey() == null)
@@ -136,16 +144,20 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 		}
 	}
 
+	/**
+	 * Fetch the job instance with the provided identifier.
+	 *
+	 * @param instanceId the job identifier
+	 * @return the job instance with this identifier or {@code null} if it doesn't
+	 *         exist
+	 */
 	@Override
 	public JobInstance getJobInstance(Long instanceId) {
-		/**
-		 * SELECT JOB_INSTANCE_ID, JOB_NAME, JOB_KEY, VERSION from %PREFIX%JOB_INSTANCE
-		 * where JOB_INSTANCE_ID = ?
-		 */
+
 		JobInstance jobInstance = null;
 
-		Set<RedisJobInstance> setjobInstances = opsJobInstanceSortedSet.rangeByScore(JOB_INSTANCE_SET_KEY, instanceId,
-				instanceId);
+		Set<RedisJobInstance> setjobInstances = opsJobInstanceSortedSet.rangeByScore(AppConstants.JOB_INSTANCE_SET_KEY,
+				instanceId, instanceId);
 		if (!setjobInstances.isEmpty()) {
 			for (RedisJobInstance instance : setjobInstances) {
 				jobInstance = new JobInstance(instance.getJobInstanceId(), instance.getJobName());
@@ -156,16 +168,20 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 		return jobInstance;
 	}
 
+	/**
+	 * Fetch the JobInstance for the provided JobExecution.
+	 *
+	 * @param jobExecution the JobExecution
+	 * @return the JobInstance for the provided execution or {@code null} if it
+	 *         doesn't exist.
+	 */
 	@Override
 	public JobInstance getJobInstance(JobExecution jobExecution) {
-		/**
-		 * SELECT ji.JOB_INSTANCE_ID, JOB_NAME, JOB_KEY, ji.VERSION from
-		 * %PREFIX%JOB_INSTANCE ji, %PREFIX%JOB_EXECUTION je where JOB_EXECUTION_ID = ?
-		 * and ji.JOB_INSTANCE_ID = je.JOB_INSTANCE_ID
-		 */
 
-		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(JOB_INSTANCE_SET_KEY, 0, -1);
-		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet.range(JOB_EXECUTION_SET_KEY, 0, -1);
+		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(AppConstants.JOB_INSTANCE_SET_KEY, 0,
+				-1);
+		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet.range(AppConstants.JOB_EXECUTION_SET_KEY,
+				0, -1);
 		if (!redisJobInstances.isEmpty() && !redisJobExecutions.isEmpty()) {
 			for (RedisJobInstance ji : redisJobInstances) {
 				for (RedisJobExecution je : redisJobExecutions) {
@@ -182,16 +198,26 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 		return null;
 	}
 
+	/**
+	 * Fetch the last job instances with the provided name, sorted backwards by
+	 * primary key.
+	 *
+	 * if using the JdbcJobInstance, you can provide the jobName with a wildcard
+	 * (e.g. *Job) to return 'like' job names. (e.g. *Job will return 'someJob' and
+	 * 'otherJob')
+	 *
+	 * @param jobName the job name
+	 * @param start   the start index of the instances to return
+	 * @param count   the maximum number of objects to return
+	 * @return the job instances with this name or empty if none
+	 */
 	@Override
 	public List<JobInstance> getJobInstances(String jobName, int start, int count) {
-		/**
-		 * SELECT JOB_INSTANCE_ID, JOB_NAME from %PREFIX%JOB_INSTANCE where JOB_NAME = ?
-		 * order by JOB_INSTANCE_ID desc
-		 */
 
 		List<JobInstance> result = new ArrayList<>();
 		JobInstance jobInstance = null;
-		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(JOB_INSTANCE_SET_KEY, 0, -1);
+		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(AppConstants.JOB_INSTANCE_SET_KEY, 0,
+				-1);
 		if (!redisJobInstances.isEmpty()) {
 			for (RedisJobInstance redisJobInstance : redisJobInstances) {
 				if (redisJobInstance.getJobName().equals(jobName)) {
@@ -207,13 +233,17 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 
 	}
 
+	/**
+	 * Retrieve the names of all job instances sorted alphabetically - i.e. jobs
+	 * that have ever been executed.
+	 *
+	 * @return the names of all job instances
+	 */
 	@Override
 	public List<String> getJobNames() {
-		/**
-		 * SELECT distinct JOB_NAME from %PREFIX%JOB_INSTANCE order by JOB_NAME
-		 */
+
 		List<String> result = new ArrayList<>();
-		Set<String> setJobNames = opsJobInstanceString.range(JOB_INSTANCE_STRING_KEY, 0, -1);
+		Set<String> setJobNames = opsJobInstanceString.range(AppConstants.JOB_INSTANCE_STRING_KEY, 0, -1);
 		if (!setJobNames.isEmpty()) {
 			for (String jobName : setJobNames) {
 				result.add(jobName);
@@ -223,18 +253,26 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 		return result;
 	}
 
+	/**
+	 * Fetch the last job instances with the provided name, sorted backwards by
+	 * primary key, using a 'like' criteria
+	 * 
+	 * @param jobName {@link String} containing the name of the job.
+	 * @param start   int containing the offset of where list of job instances
+	 *                results should begin.
+	 * @param count   int containing the number of job instances to return.
+	 * @return a list of {@link JobInstance} for the job name requested.
+	 */
 	@Override
 	public List<JobInstance> findJobInstancesByName(String jobName, int start, int count) {
-		/**
-		 * SELECT JOB_INSTANCE_ID, JOB_NAME from %PREFIX%JOB_INSTANCE where JOB_NAME
-		 * like ? order by JOB_INSTANCE_ID desc
-		 */
-		LOGGER.info("jobName");
-		String convertedJobName = jobName.replaceAll(STAR_WILDCARD, STAR_WILDCARD_PATTERN);
+
+		LOGGER.info("jobName :{}", jobName);
+		String convertedJobName = jobName.replaceAll(AppConstants.STAR_WILDCARD, AppConstants.STAR_WILDCARD_PATTERN);
 
 		List<JobInstance> result = new ArrayList<>();
 		JobInstance jobInstance = null;
-		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(JOB_INSTANCE_SET_KEY, 0, -1);
+		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(AppConstants.JOB_INSTANCE_SET_KEY, 0,
+				-1);
 		if (!redisJobInstances.isEmpty()) {
 			for (RedisJobInstance redisJobInstance : redisJobInstances) {
 				if (redisJobInstance.getJobName().matches(convertedJobName)) {
@@ -249,14 +287,23 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 		return subset(result, start, count);
 	}
 
+	/**
+	 * Query the repository for the number of unique {@link JobInstance}s associated
+	 * with the supplied job name.
+	 *
+	 * @param jobName the name of the job to query for
+	 * @return the number of {@link JobInstance}s that exist within the associated
+	 *         job repository
+	 *
+	 * @throws NoSuchJobException thrown if no Job has the jobName specified.
+	 */
 	@Override
 	public int getJobInstanceCount(String jobName) throws NoSuchJobException {
-		/**
-		 * SELECT COUNT(*) from %PREFIX%JOB_INSTANCE where JOB_NAME = ?
-		 */
+
 		List<JobInstance> result = new ArrayList<>();
 		JobInstance jobInstance = null;
-		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(JOB_INSTANCE_SET_KEY, 0, -1);
+		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(AppConstants.JOB_INSTANCE_SET_KEY, 0,
+				-1);
 		if (!redisJobInstances.isEmpty()) {
 			for (RedisJobInstance redisJobInstance : redisJobInstances) {
 				if (redisJobInstance.getJobName().equals(jobName)) {
@@ -266,6 +313,43 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 			}
 		}
 		return result.size();
+	}
+
+	/**
+	 * Fetch the last job instance by Id for the given job.
+	 * 
+	 * @param jobName name of the job
+	 * @return the last job instance by Id if any or null otherwise
+	 *
+	 * 
+	 */
+	@Override
+	@Nullable
+	public JobInstance getLastJobInstance(String jobName) {
+		JobInstance result = null;
+
+		Long maxId;
+		List<Long> jobInstanceIds;
+
+		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(AppConstants.JOB_INSTANCE_SET_KEY, 0,
+				-1);
+
+		jobInstanceIds = redisJobInstances.stream().filter(ji -> jobName.equals(ji.getJobName()))
+				.map(RedisJobInstance::getJobInstanceId).collect(Collectors.toList());
+
+		if (!jobInstanceIds.isEmpty()) {
+			Collections.sort(jobInstanceIds, Collections.reverseOrder());
+
+			maxId = jobInstanceIds.get(0);
+
+			for (RedisJobInstance rji : redisJobInstances) {
+				if (jobName.equals(rji.getJobName()) && maxId.equals(rji.getJobInstanceId())) {
+					result = getJobInstance(rji);
+					break;
+				}
+			}
+		}
+		return result;
 	}
 
 	private void sortDescending(List<JobInstance> result) {
@@ -282,6 +366,13 @@ public class RedisJobInstanceDao implements JobInstanceDao {
 		int endIndex = Math.min(start + count, jobInstances.size());
 
 		return jobInstances.subList(startIndex, endIndex);
+	}
+
+	private JobInstance getJobInstance(RedisJobInstance redisJobInstance) {
+		JobInstance jobInstance = new JobInstance(redisJobInstance.getJobInstanceId(), redisJobInstance.getJobName());
+		// should always be at version=0 because they never get updated
+		jobInstance.incrementVersion();
+		return jobInstance;
 	}
 
 }

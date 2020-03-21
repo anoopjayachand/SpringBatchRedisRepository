@@ -1,6 +1,12 @@
 package com.leo.app.dao.model;
 
+/**
+ * 
+ * @author anoop
+ *
+ */
 public class StepExecutionContext {
+	
 	private String shortContext;
 
 	private String serializedContext;
@@ -51,8 +57,9 @@ public class StepExecutionContext {
 		if (stepExecutionId == null) {
 			if (other.stepExecutionId != null)
 				return false;
-		} else if (!stepExecutionId.equals(other.stepExecutionId))
+		} else if (!stepExecutionId.equals(other.stepExecutionId)) {
 			return false;
+		}
 		return true;
 	}
 

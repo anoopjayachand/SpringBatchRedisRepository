@@ -22,9 +22,7 @@ import org.springframework.batch.core.JobInstance;
 import org.springframework.batch.core.JobParameter;
 import org.springframework.batch.core.JobParameter.ParameterType;
 import org.springframework.batch.core.JobParameters;
-import org.springframework.batch.core.repository.dao.JdbcJobExecutionDao;
 import org.springframework.batch.core.repository.dao.JobExecutionDao;
-import org.springframework.batch.core.repository.dao.MapJobExecutionDao;
 import org.springframework.batch.core.repository.dao.NoSuchObjectException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -34,20 +32,20 @@ import org.springframework.util.Assert;
 import com.leo.app.dao.model.JobExecutionParams;
 import com.leo.app.dao.model.RedisJobExecution;
 import com.leo.app.dao.model.RedisJobInstance;
+import com.leo.app.util.AppConstants;
 
+/**
+ * Data Access Object - Redis implementation for job execution.
+ * 
+ * @author anoop
+ *
+ */
 @Repository
 public class RedisJobExecutionDao implements JobExecutionDao {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(RedisJobInstanceDao.class);
 
-	JdbcJobExecutionDao dd = null;
-	MapJobExecutionDao fgf = null;
-
-	private final String JOB_EXECUTION_SET_KEY = "JOB_EXECUTION_SET_KEY";
-	private final String JOB_EXECUTION_PARAMS_SET_KEY = "JOB_EXECUTION_PARAMS_SET_KEY";
-	private final String JOB_INSTANCE_SET_KEY = "JOB_INSTANCE_SET_KEY";
-
-	private final int exitMessageLength = 2500;
+	private int exitMessageLength = AppConstants.DEFAULT_MAX_VARCHAR_LENGTH;
 
 	@Resource(name = "redisTemplate")
 	ZSetOperations<String, RedisJobExecution> opsJobExecutionSortedSet;
@@ -58,23 +56,38 @@ public class RedisJobExecutionDao implements JobExecutionDao {
 	@Resource(name = "redisTemplate")
 	ZSetOperations<String, RedisJobInstance> opsJobInstanceSortedSet;
 
+	/**
+	 * Save a new JobExecution.
+	 * 
+	 * Preconditions: jobInstance the jobExecution belongs to must have a
+	 * jobInstanceId.
+	 * 
+	 * @param jobExecution {@link JobExecution} instance to be saved.
+	 */
 	@Override
 	public void saveJobExecution(JobExecution jobExecution) {
-		/**
-		 * INSERT into %PREFIX%JOB_EXECUTION(JOB_EXECUTION_ID, JOB_INSTANCE_ID,
-		 * START_TIME, END_TIME, STATUS, EXIT_CODE, EXIT_MESSAGE, VERSION, CREATE_TIME,
-		 * LAST_UPDATED, JOB_CONFIGURATION_LOCATION) values (?, ?, ?, ?, ?, ?, ?, ?, ?,
-		 * ?, ?)
-		 */
+
 		validateJobExecution(jobExecution);
+
 		jobExecution.incrementVersion();
 		jobExecution.setId(System.currentTimeMillis());
+
 		RedisJobExecution redisJobExecution = new RedisJobExecution(jobExecution);
-		opsJobExecutionSortedSet.add(JOB_EXECUTION_SET_KEY, redisJobExecution, redisJobExecution.getJobExecutionId());
+
+		opsJobExecutionSortedSet.add(AppConstants.JOB_EXECUTION_SET_KEY, redisJobExecution,
+				redisJobExecution.getJobExecutionId());
 
 		insertJobParameters(jobExecution.getId(), jobExecution.getJobParameters());
 	}
 
+	/**
+	 * Update and existing JobExecution.
+	 * 
+	 * Preconditions: jobExecution must have an Id (which can be obtained by the
+	 * save method) and a jobInstanceId.
+	 * 
+	 * @param jobExecution {@link JobExecution} instance to be updated.
+	 */
 	@Override
 	public void updateJobExecution(JobExecution jobExecution) {
 		validateJobExecution(jobExecution);
@@ -85,76 +98,69 @@ public class RedisJobExecutionDao implements JobExecutionDao {
 		Assert.notNull(jobExecution.getVersion(),
 				"JobExecution version cannot be null. JobExecution must be saved before it can be updated");
 
-		Integer version = jobExecution.getVersion() + 1;
+		synchronized (jobExecution) {
+			Integer version = jobExecution.getVersion() + 1;
 
-		String exitDescription = jobExecution.getExitStatus().getExitDescription();
+			String exitDescription = jobExecution.getExitStatus().getExitDescription();
 
-		if (exitDescription != null && exitDescription.length() > exitMessageLength) {
-			exitDescription = exitDescription.substring(0, exitMessageLength);
-			if (LOGGER.isDebugEnabled()) {
-				LOGGER.debug("Truncating long message before update of JobExecution: {}", jobExecution);
+			if (exitDescription != null && exitDescription.length() > exitMessageLength) {
+				exitDescription = exitDescription.substring(0, exitMessageLength);
+				if (LOGGER.isDebugEnabled()) {
+					LOGGER.debug("Truncating long message before update of JobExecution: {}", jobExecution);
+				}
 			}
+
+			// Check if given JobExecution's Id already exists, if none is found
+			// it
+			// is invalid and
+			// an exception should be thrown.
+
+			Set<RedisJobExecution> executionCount = opsJobExecutionSortedSet
+					.rangeByScore(AppConstants.JOB_EXECUTION_SET_KEY, jobExecution.getId(), jobExecution.getId());
+			if (!executionCount.isEmpty() && executionCount.size() != 1) {
+				throw new NoSuchObjectException("Invalid JobExecution, ID " + jobExecution.getId() + " not found.");
+			}
+
+			RedisJobExecution redisJobExecution = new RedisJobExecution(jobExecution);
+			redisJobExecution.setVersion(version);
+			redisJobExecution.setExitMessage(exitDescription);
+
+			boolean count = opsJobExecutionSortedSet.add(AppConstants.JOB_EXECUTION_SET_KEY, redisJobExecution,
+					redisJobExecution.getJobExecutionId());
+
+			// Avoid concurrent modifications...
+			if (!count) {
+				int currentVersion = redisJobExecution.getVersion();
+				throw new OptimisticLockingFailureException(
+						"Attempt to update job execution id=" + jobExecution.getId() + " with wrong version ("
+								+ jobExecution.getVersion() + "), where current version is " + currentVersion);
+			}
+
+			redisJobExecution.incrementVersion();
+			jobExecution.incrementVersion();
 		}
-
-		// Check if given JobExecution's Id already exists, if none is found
-		// it
-		// is invalid and
-		// an exception should be thrown.
-		/**
-		 * SELECT COUNT(*) FROM %PREFIX%JOB_EXECUTION WHERE JOB_EXECUTION_ID = ?
-		 */
-		Set<RedisJobExecution> executionCount = opsJobExecutionSortedSet.rangeByScore(JOB_EXECUTION_SET_KEY,
-				jobExecution.getId(), jobExecution.getId());
-		if (!executionCount.isEmpty() && executionCount.size() != 1) {
-			throw new NoSuchObjectException("Invalid JobExecution, ID " + jobExecution.getId() + " not found.");
-		}
-
-		RedisJobExecution redisJobExecution = new RedisJobExecution(jobExecution);
-		redisJobExecution.setVersion(version);
-		redisJobExecution.setExitMessage(exitDescription);
-
-		/**
-		 * UPDATE %PREFIX%JOB_EXECUTION set START_TIME = ?, END_TIME = ?, STATUS = ?,
-		 * EXIT_CODE = ?, EXIT_MESSAGE = ?, VERSION = ?, CREATE_TIME = ?, LAST_UPDATED =
-		 * ? where JOB_EXECUTION_ID = ? and VERSION = ?
-		 * 
-		 */
-
-		boolean count = opsJobExecutionSortedSet.add(JOB_EXECUTION_SET_KEY, redisJobExecution,
-				redisJobExecution.getJobExecutionId());
-
-		// Avoid concurrent modifications...
-		if (!count) {
-			/**
-			 * SELECT VERSION FROM %PREFIX%JOB_EXECUTION WHERE JOB_EXECUTION_ID=?
-			 */
-			int currentVersion = redisJobExecution.getVersion();
-			throw new OptimisticLockingFailureException(
-					"Attempt to update job execution id=" + jobExecution.getId() + " with wrong version ("
-							+ jobExecution.getVersion() + "), where current version is " + currentVersion);
-		}
-
-		redisJobExecution.incrementVersion();
-		jobExecution.incrementVersion();
 
 	}
 
+	/**
+	 * Return all {@link JobExecution}s for given {@link JobInstance}, sorted
+	 * backwards by creation order (so the first element is the most recent).
+	 *
+	 * @param jobInstance parent {@link JobInstance} of the {@link JobExecution}s to
+	 *                    find.
+	 * @return {@link List} containing JobExecutions for the jobInstance.
+	 */
 	@Override
 	public List<JobExecution> findJobExecutions(final JobInstance job) {
 		Assert.notNull(job, "Job cannot be null.");
 		Assert.notNull(job.getId(), "Job Id cannot be null.");
-		/**
-		 * SELECT JOB_EXECUTION_ID, START_TIME, END_TIME, 
-		 * STATUS, EXIT_CODE, EXIT_MESSAGE, CREATE_TIME, 
-		 * LAST_UPDATED, VERSION, JOB_CONFIGURATION_LOCATION 
-		 * from JOB_EXECUTION where JOB_INSTANCE_ID = ? 
-		 * order by JOB_EXECUTION_ID desc
-		 */
+		
 		List<JobExecution> result = new ArrayList<>();
-		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet.range(JOB_EXECUTION_SET_KEY, 0, -1);
-		if(!redisJobExecutions.isEmpty()) {
-			for(RedisJobExecution redisJobExecution : redisJobExecutions) {
-				if(job.getId().equals(redisJobExecution.getJobInstanceId())) {
+		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet.range(AppConstants.JOB_EXECUTION_SET_KEY,
+				0, -1);
+		if (!redisJobExecutions.isEmpty()) {
+			for (RedisJobExecution redisJobExecution : redisJobExecutions) {
+				if (job.getId().equals(redisJobExecution.getJobInstanceId())) {
 					result.add(getJobExecution(redisJobExecution, job));
 				}
 			}
@@ -163,21 +169,22 @@ public class RedisJobExecutionDao implements JobExecutionDao {
 		return result;
 	}
 
+	/**
+	 * Find the last {@link JobExecution} to have been created for a given
+	 * {@link JobInstance}.
+	 * @param jobInstance the {@link JobInstance}
+	 * @return the last {@link JobExecution} to execute for this instance or
+	 * {@code null} if no job execution is found for the given job instance.
+	 */
 	@Override
 	public JobExecution getLastJobExecution(JobInstance jobInstance) {
-		/**
-		 * SELECT JOB_EXECUTION_ID, START_TIME, END_TIME, STATUS, EXIT_CODE,
-		 * EXIT_MESSAGE, CREATE_TIME, LAST_UPDATED, VERSION, JOB_CONFIGURATION_LOCATION
-		 * from %PREFIX%JOB_EXECUTION E where JOB_INSTANCE_ID = ? and JOB_EXECUTION_ID
-		 * in (SELECT max(JOB_EXECUTION_ID) from %PREFIX%JOB_EXECUTION E2 where
-		 * E2.JOB_INSTANCE_ID = ?)
-		 */
-
+		
 		List<JobExecution> executions = new ArrayList<>();
 		Long maxId = null;
 		List<Long> jobExecutionIds = new ArrayList<>();
 
-		Set<RedisJobExecution> executionByJobInstance = opsJobExecutionSortedSet.range(JOB_EXECUTION_SET_KEY, 0, -1);
+		Set<RedisJobExecution> executionByJobInstance = opsJobExecutionSortedSet
+				.range(AppConstants.JOB_EXECUTION_SET_KEY, 0, -1);
 
 		if (!executionByJobInstance.isEmpty()) {
 			for (RedisJobExecution obj : executionByJobInstance) {
@@ -202,19 +209,18 @@ public class RedisJobExecutionDao implements JobExecutionDao {
 		}
 	}
 
+	/**
+	 * @param jobName {@link String} containing the name of the job.
+	 * @return all {@link JobExecution} that are still running (or indeterminate
+	 * state), i.e. having null end date, for the specified job name.
+	 */
 	@Override
 	public Set<JobExecution> findRunningJobExecutions(String jobName) {
-		/**
-		 * SELECT E.JOB_EXECUTION_ID, E.START_TIME, E.END_TIME, E.STATUS, E.EXIT_CODE,
-		 * E.EXIT_MESSAGE, E.CREATE_TIME, E.LAST_UPDATED, E.VERSION, E.JOB_INSTANCE_ID,
-		 * E.JOB_CONFIGURATION_LOCATION from JOB_EXECUTION E, JOB_INSTANCE I where
-		 * E.JOB_INSTANCE_ID=I.JOB_INSTANCE_ID and I.JOB_NAME=? and E.START_TIME is not
-		 * NULL and E.END_TIME is NULL order by E.JOB_EXECUTION_ID desc
-		 * 
-		 */
-
-		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(JOB_INSTANCE_SET_KEY, 0, -1);
-		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet.range(JOB_EXECUTION_SET_KEY, 0, -1);
+		
+		Set<RedisJobInstance> redisJobInstances = opsJobInstanceSortedSet.range(AppConstants.JOB_INSTANCE_SET_KEY, 0,
+				-1);
+		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet.range(AppConstants.JOB_EXECUTION_SET_KEY,
+				0, -1);
 
 		Set<JobExecution> result = new HashSet<>();
 
@@ -237,39 +243,37 @@ public class RedisJobExecutionDao implements JobExecutionDao {
 		return result;
 	}
 
+	/**
+	 * @param executionId {@link Long} containing the id of the execution.
+	 * @return the {@link JobExecution} for given identifier.
+	 */
 	@Override
 	public JobExecution getJobExecution(Long executionId) {
-		/**
-		 * SELECT JOB_EXECUTION_ID, START_TIME, END_TIME, STATUS, EXIT_CODE,
-		 * EXIT_MESSAGE, CREATE_TIME, LAST_UPDATED, VERSION, JOB_CONFIGURATION_LOCATION
-		 * from JOB_EXECUTION where JOB_EXECUTION_ID = ?
-		 */
-		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet.rangeByScore(JOB_EXECUTION_SET_KEY,
-				executionId, executionId);
+		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet
+				.rangeByScore(AppConstants.JOB_EXECUTION_SET_KEY, executionId, executionId);
 		if (!redisJobExecutions.isEmpty()) {
-			for (RedisJobExecution execution : redisJobExecutions) {
-				return getJobExecution(execution, null);
-			}
+			return getJobExecution(redisJobExecutions.iterator().next(), null);
 		}
 		return null;
 	}
 
+	/**
+	 * Because it may be possible that the status of a JobExecution is updated
+	 * while running, the following method will synchronize only the status and
+	 * version fields.
+	 * 
+	 * @param jobExecution to be updated.
+	 */
 	@Override
 	public void synchronizeStatus(JobExecution jobExecution) {
-		/**
-		 * SELECT VERSION FROM %PREFIX%JOB_EXECUTION WHERE JOB_EXECUTION_ID=?
-		 */
 		int currentVersion = 0;
-		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet.rangeByScore(JOB_EXECUTION_SET_KEY,
-				jobExecution.getId(), jobExecution.getId());
+		Set<RedisJobExecution> redisJobExecutions = opsJobExecutionSortedSet
+				.rangeByScore(AppConstants.JOB_EXECUTION_SET_KEY, jobExecution.getId(), jobExecution.getId());
 		if (!redisJobExecutions.isEmpty()) {
 			for (RedisJobExecution execution : redisJobExecutions) {
 				currentVersion = execution.getVersion();
 
 				if (currentVersion != jobExecution.getVersion().intValue()) {
-					/**
-					 * SELECT STATUS from %PREFIX%JOB_EXECUTION where JOB_EXECUTION_ID = ?
-					 */
 					String status = execution.getStatus();
 					jobExecution.upgradeStatus(BatchStatus.valueOf(status));
 					jobExecution.setVersion(currentVersion);
@@ -321,13 +325,8 @@ public class RedisJobExecutionDao implements JobExecutionDao {
 			jobExecutionParams = new JobExecutionParams(executionId, key, type.toString(), dateVal, identifyingFlag);
 		}
 
-		/**
-		 * INSERT into %PREFIX%JOB_EXECUTION_PARAMS(JOB_EXECUTION_ID, KEY_NAME, TYPE_CD,
-		 * " + "STRING_VAL, DATE_VAL, LONG_VAL, DOUBLE_VAL, IDENTIFYING) values (?, ?,
-		 * ?, ?, ?, ?, ?, ?)
-		 */
 		if (jobExecutionParams != null) {
-			opsJobExecutionParamsSortedSet.add(JOB_EXECUTION_PARAMS_SET_KEY, jobExecutionParams,
+			opsJobExecutionParamsSortedSet.add(AppConstants.JOB_EXECUTION_PARAMS_SET_KEY, jobExecutionParams,
 					jobExecutionParams.getJobExecutionId());
 		}
 	}
@@ -342,16 +341,13 @@ public class RedisJobExecutionDao implements JobExecutionDao {
 	}
 
 	protected JobParameters getJobParameters(Long executionId) {
-		/**
-		 * SELECT JOB_EXECUTION_ID, KEY_NAME, TYPE_CD,STRING_VAL, DATE_VAL, LONG_VAL,
-		 * DOUBLE_VAL, IDENTIFYING from JOB_EXECUTION_PARAMS where JOB_EXECUTION_ID = ?
-		 */
+		
 		final Map<String, JobParameter> map = new HashMap<>();
 		ParameterType type = null;
 		JobParameter value = null;
 
 		Set<JobExecutionParams> jobExecutionParams = opsJobExecutionParamsSortedSet
-				.rangeByScore(JOB_EXECUTION_PARAMS_SET_KEY, executionId, executionId);
+				.rangeByScore(AppConstants.JOB_EXECUTION_PARAMS_SET_KEY, executionId, executionId);
 
 		if (!jobExecutionParams.isEmpty()) {
 			for (JobExecutionParams parameter : jobExecutionParams) {

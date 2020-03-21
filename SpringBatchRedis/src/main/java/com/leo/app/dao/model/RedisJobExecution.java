@@ -9,6 +9,11 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.deser.std.DateDeserializers.DateDeserializer;
 import com.fasterxml.jackson.databind.ser.std.DateSerializer;
 
+/**
+ * 
+ * @author anoop
+ *
+ */
 public class RedisJobExecution {
 
 	private Long jobExecutionId;

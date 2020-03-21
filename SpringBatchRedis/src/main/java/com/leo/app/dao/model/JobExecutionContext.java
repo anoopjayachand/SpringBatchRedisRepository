@@ -1,9 +1,16 @@
 package com.leo.app.dao.model;
 
+/**
+ * 
+ * @author anoop
+ *
+ */
 public class JobExecutionContext {
 
 	private String shortContext;
+
 	private String serializedContext;
+
 	private Long jobExecutionId;
 
 	public String getShortContext() {
@@ -50,8 +57,9 @@ public class JobExecutionContext {
 		if (jobExecutionId == null) {
 			if (other.jobExecutionId != null)
 				return false;
-		} else if (!jobExecutionId.equals(other.jobExecutionId))
+		} else if (!jobExecutionId.equals(other.jobExecutionId)) {
 			return false;
+		}
 		return true;
 	}
 

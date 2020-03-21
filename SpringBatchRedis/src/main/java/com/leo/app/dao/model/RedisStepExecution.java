@@ -10,6 +10,11 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.deser.std.DateDeserializers.DateDeserializer;
 import com.fasterxml.jackson.databind.ser.std.DateSerializer;
 
+/**
+ * 
+ * @author anoop
+ *
+ */
 public class RedisStepExecution {
 
 	private Long stepExecutionId;
@@ -54,7 +59,7 @@ public class RedisStepExecution {
 	@JsonDeserialize(using = DateDeserializer.class)
 	private Date lastUpdated;
 
-	private transient JobExecution jobExecution;
+	private JobExecution jobExecution;
 
 	public RedisStepExecution() {
 

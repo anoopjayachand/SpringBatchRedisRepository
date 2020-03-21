@@ -8,6 +8,11 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.deser.std.DateDeserializers.DateDeserializer;
 import com.fasterxml.jackson.databind.ser.std.DateSerializer;
 
+/**
+ * 
+ * @author anoop
+ *
+ */
 public class JobExecutionParams {
 
 	private Long jobExecutionId;
@@ -165,8 +170,9 @@ public class JobExecutionParams {
 		if (jobExecutionId == null) {
 			if (other.jobExecutionId != null)
 				return false;
-		} else if (!jobExecutionId.equals(other.jobExecutionId))
+		} else if (!jobExecutionId.equals(other.jobExecutionId)) {
 			return false;
+		}
 		return true;
 	}
 

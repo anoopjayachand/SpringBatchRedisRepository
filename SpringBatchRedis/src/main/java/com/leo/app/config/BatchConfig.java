@@ -11,6 +11,13 @@ import org.springframework.context.annotation.Configuration;
 
 import com.leo.app.tasklet.BookReaderTasklet;
 
+/**
+ * The BatchConfig class is a configuration class, It enables batch processing
+ * and configuring Spring Batch - Job(s) and Step(s) beans.
+ * 
+ * @author anoop
+ *
+ */
 @Configuration
 @EnableBatchProcessing
 public class BatchConfig {

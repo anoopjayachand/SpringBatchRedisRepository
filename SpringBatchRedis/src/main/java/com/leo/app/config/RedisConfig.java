@@ -3,8 +3,10 @@ package com.leo.app.config;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.jedis.JedisConnectionFactory;
@@ -15,8 +17,22 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 import redis.embedded.RedisServer;
 import redis.embedded.RedisServerBuilder;
 
+/**
+ * 
+ * The RedisConfig configures RedisConnectionFactory and RedisTemplate.
+ * 
+ * And this application using an embedded Redis server, so we need to start
+ * during the context loading. 
+ * 
+ * @author anoop
+ *
+ */
 @Configuration
 public class RedisConfig {
+
+	@Autowired
+	Environment environment;
+
 	private RedisServer redisServer;
 
 	@Bean
@@ -27,10 +43,6 @@ public class RedisConfig {
 
 	@Bean
 	RedisTemplate<?, ?> redisTemplate() {
-		/*
-		 * ObjectMapper om = new ObjectMapper(); om.setVisibility(PropertyAccessor.ALL,
-		 * JsonAutoDetect.Visibility.ANY);
-		 */
 
 		GenericJackson2JsonRedisSerializer genericJackson2JsonRedisSerializer = new GenericJackson2JsonRedisSerializer();
 

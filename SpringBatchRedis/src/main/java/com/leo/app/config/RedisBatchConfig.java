@@ -16,6 +16,27 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
 
+/**
+ * 
+ * The RedisBatchConfig class configures Spring Batch - Job Repository,
+ * Transaction Manager and Job Explorer.
+ * 
+ * The Spring Batch does not have an implementation for Redis Job Repository.
+ * Spring Batch currently supports only RDBMS job repository. And they
+ * implemented it with JDBC DAO design pattern.
+ * 
+ * To give a Redis job repository support for Spring Batch, we need to do the
+ * implementation for following interfaces, 1. ExecutionContextDao 2.
+ * JobExecutionDao 3. StepExecutionDao 4. JobInstanceDao
+ * 
+ * After implementing above mentioned interfaces, we need to configure it with
+ * Spring Batch's BatchConfigurer. To do that, first we need to implements the
+ * BatchConfigurer interface of Spring Batch and override its methods and
+ * specify the DAO implementations.
+ * 
+ * @author anoop
+ *
+ */
 @Configuration
 public class RedisBatchConfig implements BatchConfigurer {
 

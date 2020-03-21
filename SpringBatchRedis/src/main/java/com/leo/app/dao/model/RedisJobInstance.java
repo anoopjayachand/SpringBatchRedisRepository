@@ -2,11 +2,19 @@ package com.leo.app.dao.model;
 
 import org.springframework.util.Assert;
 
+/**
+ * 
+ * @author anoop
+ *
+ */
 public class RedisJobInstance {
 
 	private Long jobInstanceId;
+	
 	private String jobName;
+	
 	private String jobKey;
+	
 	private Integer version;
 
 	public RedisJobInstance() {
